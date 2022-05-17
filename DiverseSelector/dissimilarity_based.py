@@ -150,6 +150,7 @@ class DissimilaritySelection(SelectionBase):
         -------
         Chosen dissimilarity function.
         """
+
         def brute_strength(selected=None,
                            n_selected=self.num_selected,
                            brute_strength_type=self.brute_strength_type,
@@ -168,7 +169,6 @@ class DissimilaritySelection(SelectionBase):
             """
             if selected is None:
                 selected = [self.starting_idx]
-                return brute_strength(selected, n_selected, brute_strength_type)
 
             # if we all selected all n_selected molecules then return list of selected mols
             if len(selected) == n_selected:
@@ -225,8 +225,6 @@ class DissimilaritySelection(SelectionBase):
 
             if selected is None:
                 selected = []
-                return grid_partitioning(selected, n_selected, cells,
-                                         max_dim, arr_features, grid_method)
 
             data_dim = len(arr_features[0])
             if data_dim > max_dim:
@@ -319,8 +317,7 @@ class DissimilaritySelection(SelectionBase):
             return selected
 
         def sphere_exclusion(selected=None,
-                             n_selected=12,
-                             s_max=1,
+                             r=self.r,
                              order=None,
                              ):
             """Directed sphere exclusion dissimilarity algorithm.
@@ -329,7 +326,7 @@ class DissimilaritySelection(SelectionBase):
             ----------
             selected
             n_selected
-            s_max
+            r
             order
 
             Returns
@@ -338,7 +335,6 @@ class DissimilaritySelection(SelectionBase):
             """
             if selected is None:
                 selected = []
-                return sphere_exclusion(selected, n_selected, s_max, order)
 
             if order is None:
                 ref = [self.starting_idx]
@@ -353,7 +349,6 @@ class DissimilaritySelection(SelectionBase):
                     distances.append((distance_sq, idx))
                 distances.sort()
                 order = [idx for dist, idx in distances]
-                return sphere_exclusion(selected, n_selected, s_max, order)
 
             for idx in order:
                 if len(selected) == 0:
@@ -368,15 +363,12 @@ class DissimilaritySelection(SelectionBase):
                         distance_sq += (selected_point[i] - point) ** 2
                     distances.append(np.sqrt(distance_sq))
                 min_dist = min(distances)
-                if min_dist > s_max:
+                if min_dist > r:
                     selected.append(idx)
-                if len(selected) == n_selected:
-                    return selected
 
             return selected
 
         def optisim(selected=None,
-                    n_selected=self.num_selected,
                     k=self.k,
                     r=self.r,
                     recycling=None,
@@ -397,10 +389,6 @@ class DissimilaritySelection(SelectionBase):
             """
             if selected is None:
                 selected = [self.starting_idx]
-                return optisim(selected, n_selected, k, r, recycling)
-
-            if len(selected) >= n_selected:
-                return selected
 
             if recycling is None:
                 recycling = []
@@ -411,7 +399,7 @@ class DissimilaritySelection(SelectionBase):
                 if len(candidates) == 0:
                     if len(subsample) > 0:
                         selected.append(max(zip(subsample.values(), subsample.keys()))[1])
-                        return optisim(selected, n_selected, k, r, recycling)
+                        return optisim(selected, k, r, recycling)
                     return selected
                 rng = np.random.default_rng(seed=self.random_seed)
                 random_int = rng.integers(low=0, high=len(candidates), size=1)[0]
@@ -433,10 +421,37 @@ class DissimilaritySelection(SelectionBase):
                                        selected + recycling + list(subsample.keys()))
             selected.append(max(zip(subsample.values(), subsample.keys()))[1])
 
-            return optisim(selected, n_selected, k, r, recycling)
+            return optisim(selected, k, r, recycling)
 
         select_algorithms = {"brute_strength": brute_strength,
                              "grid_partitioning": grid_partitioning,
                              "sphere_exclusion": sphere_exclusion,
                              "optisim": optisim}
-        return select_algorithms[self.dissim_func]()
+        if self.dissim_func == "sphere_exclusion" or self.dissim_func == "optisim":
+            # Use numpy.optimize.bisect instead
+            arr_range = (max(self.features[:, 0]) - min(self.features[:, 0]),
+                         max(self.features[:, 1]) - min(self.features[:, 1]))
+            rg = max(arr_range)/self.num_selected * 3
+            result = select_algorithms[self.dissim_func](r=rg)
+            if len(result) == self.num_selected:
+                return result
+
+            low = rg if len(result) > self.num_selected else 0
+            high = rg if low == 0 else None
+            bounds = [low, high]
+            count = 0
+            while len(result) != self.num_selected and count < 20:
+                if bounds[1] is None:
+                    rg = bounds[0] * 2
+                else:
+                    rg = (bounds[0] + bounds[1]) / 2
+                result = select_algorithms[self.dissim_func](r=rg)
+                if len(result) > self.num_selected:
+                    bounds[0] = rg
+                else:
+                    bounds[1] = rg
+                count += 1
+
+            return result
+        else:
+            return select_algorithms[self.dissim_func]()

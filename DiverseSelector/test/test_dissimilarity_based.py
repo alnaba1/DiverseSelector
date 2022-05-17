@@ -111,12 +111,12 @@ def test_sphere_exclusion():
     selected_ids = selector.select()
 
     # make sure all the selected indices are the same with expectation
-    assert_equal([17, 31, 90, 6, 12, 76, 26, 81, 2, 14, 57], selected_ids)
+    assert_equal([17, 92, 64, 6, 12, 76, 10, 87, 73, 66, 11, 57], selected_ids)
 
 
 def test_optisim():
     """Testing optisim algorithm."""
-    selector = DissimilaritySelection(num_selected=12,
+    selector = DissimilaritySelection(num_selected=20,
                                       features=coords,
                                       dissim_func="optisim",
                                       random_seed=42)
