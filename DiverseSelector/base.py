@@ -22,7 +22,7 @@
 # --
 
 """Base class for diversity based subset selection."""
-
+import collections
 from abc import ABC, abstractmethod
 import warnings
 
@@ -117,3 +117,185 @@ class SelectionBase(ABC):
 
         """
         pass
+
+
+class KDTreeBase(SelectionBase, ABC):
+    def __int__(self):
+        self.func_distance = None
+        self.BT = None
+
+    def _kdtree(self, arr):
+        """Construct a k-d tree from an iterable of points.
+
+        Parameters
+        ----------
+        arr: list
+            Coordinate array of points.
+
+        Returns
+        -------
+        kdtree: collections.namedtuple
+            KDTree organizing coordinates.
+        """
+
+        k = len(arr[0])
+
+        def build(points, depth, old_indices=None):
+            """Build a k-d tree from a set of points at a given depth."""
+            if len(points) == 0:
+                return None
+            middle = len(points) // 2
+            indices, points = zip(*sorted(enumerate(points), key=lambda x: x[1][depth % k]))
+            if old_indices is not None:
+                indices = [old_indices[i] for i in indices]
+            return self.BT(
+                value=points[middle],
+                index=indices[middle],
+                left=build(
+                    points=points[:middle],
+                    depth=depth + 1,
+                    old_indices=indices[:middle],
+                ),
+                right=build(
+                    points=points[middle + 1:],
+                    depth=depth + 1,
+                    old_indices=indices[middle + 1:],
+                ),
+            )
+
+        kdtree = build(points=arr, depth=0)
+        return kdtree
+
+    def _find_nearest_neighbor(self, kdtree, point, threshold):
+        """
+        Find the nearest neighbors in a k-d tree for a point.
+
+        Parameters
+        ----------
+        kdtree: collections.namedtuple
+            KDTree organizing coordinates.
+        point: list
+            Query point for search.
+        threshold: float
+            The boundary used to mark all the points whose distance is within the threshold.
+
+        Returns
+        -------
+        to_eliminate: list
+            A list containing all the indices of points too close to the newly selected point.
+        """
+        k = len(point)
+        to_eliminate = []
+
+        def search(tree, depth):
+            # Recursively search through the k-d tree to find the
+            # nearest neighbor.
+
+            if tree is None:
+                return
+
+            distance = self.func_distance(tree.value, point)
+            if distance < threshold:
+                to_eliminate.append((distance, tree.index))
+
+            axis = depth % k
+            diff = point[axis] - tree.value[axis]
+            if diff <= 0:
+                close, away = tree.left, tree.right
+            else:
+                close, away = tree.right, tree.left
+
+            search(tree=close, depth=depth + 1)
+            if diff ** 2 < threshold:
+                search(tree=away, depth=depth + 1)
+
+        search(tree=kdtree, depth=0)
+        to_eliminate.sort()
+        to_eliminate.pop(0)
+        to_eliminate = [index for dist, index in to_eliminate]
+        return to_eliminate
+
+    def _eliminate(self, tree, point, threshold, num_eliminate, bv):
+        """Eliminates points from being selected in future rounds.
+
+        Parameters
+        ----------
+        tree: collections.namedtuple
+            KDTree organizing coordinates.
+        point: list
+            Point where close neighbors should be eliminated.
+        threshold: float
+            An average of all the furthest distances found using find_furthest_neighbor
+        num_eliminate: int
+            Maximum number of points permitted to be eliminated.
+        bv: bitarray
+            Bitvector marking picked/eliminated points.
+
+        Returns
+        -------
+        num_eliminate: int
+            Maximum number of points permitted to be eliminated.
+        """
+        elim_candidates = self._find_nearest_neighbor(tree, point, threshold)
+        elim_candidates = elim_candidates[:self.ratio]
+        num_eliminate -= len(elim_candidates)
+        if num_eliminate < 0:
+            elim_candidates = elim_candidates[:num_eliminate]
+        for index in elim_candidates:
+            bv[index] = 1
+        return num_eliminate
+
+    def predict_radius(obj: Union[DirectedSphereExclusion, OptiSim], arr, num_selected,
+                       cluster_ids=None):
+        """
+        Algorithm that uses sphere_exclusion for selecting points from cluster.
+
+        Parameters
+        ----------
+        obj: object
+            Instance of dissimilarity selection class
+        arr: np.ndarray
+            Coordinate array of points
+        num_selected: int
+            Number of molecules that need to be selected.
+        cluster_ids: np.ndarray
+            Indices of molecules that form a cluster
+
+        Returns
+        -------
+        selected: list
+            List of ids of selected molecules
+        """
+        if not isinstance(obj, (DirectedSphereExclusion, OptiSim)):
+            raise ValueError("Not valid class for function.")
+
+        if cluster_ids is not None:
+            arr = arr[cluster_ids]
+        if obj.r is not None:
+            return obj.algorithm(arr)
+        # Use numpy.optimize.bisect instead
+        rg = max(np.ptp(arr, axis=0)) / num_selected * 3
+        obj.r = rg
+        result = obj.algorithm(arr)
+        if len(result) == num_selected:
+            return result
+
+        low = rg if len(result) > num_selected else 0
+        high = rg if low == 0 else None
+        bounds = [low, high]
+        count = 0
+        error = num_selected * obj.tolerance / 100
+        while (len(result) < num_selected - error or len(result) > num_selected + error) and count < 20:
+            if bounds[1] is None:
+                rg = bounds[0] * 2
+            else:
+                rg = (bounds[0] + bounds[1]) / 2
+            obj.r = rg
+            result = obj.algorithm(arr)
+            if len(result) > num_selected:
+                bounds[0] = rg
+            else:
+                bounds[1] = rg
+            count += 1
+        obj.r = None
+        return result

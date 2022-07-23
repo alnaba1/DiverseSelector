@@ -26,7 +26,7 @@ import math
 from typing import Union
 
 import bitarray
-from DiverseSelector.base import SelectionBase
+from DiverseSelector.base import KDTreeBase, SelectionBase
 from DiverseSelector.diversity import compute_diversity
 import numpy as np
 from sklearn.decomposition import PCA
@@ -543,7 +543,7 @@ class GridPartitioning(SelectionBase):
         return selected
 
 
-class KDTree(SelectionBase):
+class KDTree(KDTreeBase):
     """Selecting points using an algorithm adapted from KDTree.
 
     Points are initially used to construct a KDTree. Eucleidean distances are used for this
@@ -582,49 +582,7 @@ class KDTree(SelectionBase):
         self.scaling = scaling/100
         self.ratio = None
 
-    def kdtree(self, arr):
-        """Construct a k-d tree from an iterable of points.
-
-        Parameters
-        ----------
-        arr: list
-            Coordinate array of points.
-
-        Returns
-        -------
-        kdtree: collections.namedtuple
-            KDTree organizing coordinates.
-        """
-
-        k = len(arr[0])
-
-        def build(points, depth, old_indices=None):
-            """Build a k-d tree from a set of points at a given depth."""
-            if len(points) == 0:
-                return None
-            middle = len(points) // 2
-            indices, points = zip(*sorted(enumerate(points), key=lambda x: x[1][depth % k]))
-            if old_indices is not None:
-                indices = [old_indices[i] for i in indices]
-            return self.BT(
-                value=points[middle],
-                index=indices[middle],
-                left=build(
-                    points=points[:middle],
-                    depth=depth + 1,
-                    old_indices=indices[:middle],
-                ),
-                right=build(
-                    points=points[middle + 1:],
-                    depth=depth + 1,
-                    old_indices=indices[middle + 1:],
-                ),
-            )
-
-        kdtree = build(points=arr, depth=0)
-        return kdtree
-
-    def find_furthest_neighbor(self, kdtree, point, selected_bitvector):
+    def _find_furthest_neighbor(self, kdtree, point, selected_bitvector):
         """Find approximately the furthest neighbor in a k-d tree for a given point.
 
         Parameters
@@ -675,57 +633,7 @@ class KDTree(SelectionBase):
         search(tree=kdtree, depth=0)
         return best
 
-    def find_nearest_neighbor(self, kdtree, point, furthest_distance_avg):
-        """
-        Find the nearest neighbors in a k-d tree for a point.
-
-        Parameters
-        ----------
-        kdtree: collections.namedtuple
-            KDTree organizing coordinates.
-        point: list
-            Query point for search.
-        furthest_distance_avg: float
-            The furthest average distance of previous queries.
-
-        Returns
-        -------
-        to_eliminate: list
-            A list containing all the indices of points too close to the newly selected point.
-        """
-        k = len(point)
-        scaled_avg = furthest_distance_avg * self.scaling
-        to_eliminate = []
-
-        def search(tree, depth):
-            # Recursively search through the k-d tree to find the
-            # nearest neighbor.
-
-            if tree is None:
-                return
-
-            distance = self.func_distance(tree.value, point)
-            if distance < scaled_avg:
-                to_eliminate.append((distance, tree.index))
-
-            axis = depth % k
-            diff = point[axis] - tree.value[axis]
-            if diff <= 0:
-                close, away = tree.left, tree.right
-            else:
-                close, away = tree.right, tree.left
-
-            search(tree=close, depth=depth + 1)
-            if diff ** 2 < scaled_avg:
-                search(tree=away, depth=depth + 1)
-
-        search(tree=kdtree, depth=0)
-        to_eliminate.sort()
-        to_eliminate.pop(0)
-        to_eliminate = [index for dist, index in to_eliminate]
-        return to_eliminate
-
-    def eliminate(self, tree, point, best_distance_av, num_eliminate, bv):
+    def _eliminate(self, tree, point, best_distance_av, num_eliminate, bv):
         """Eliminates points from being selected in future rounds.
 
         Parameters
@@ -746,7 +654,7 @@ class KDTree(SelectionBase):
         num_eliminate: int
             Maximum number of points permitted to be eliminated.
         """
-        elim_candidates = self.find_nearest_neighbor(tree, point, best_distance_av)
+        elim_candidates = self._find_nearest_neighbor(tree, point, best_distance_av)
         elim_candidates = elim_candidates[:self.ratio]
         num_eliminate -= len(elim_candidates)
         if num_eliminate < 0:
@@ -778,7 +686,7 @@ class KDTree(SelectionBase):
         if isinstance(arr, np.ndarray):
             arr = arr.tolist()
         arr_len = len(arr)
-        tree = self.kdtree(arr)
+        tree = self._kdtree(arr)
         bv = bitarray.bitarray(arr_len)
         bv[:] = 0
         selected = [self.starting_idx]
@@ -789,7 +697,7 @@ class KDTree(SelectionBase):
         self.ratio = math.ceil(num_eliminate/num_selected)
         best_distance_av = 0
         while len(selected) < num_selected:
-            new_point = self.find_furthest_neighbor(tree, query_point, bv)
+            new_point = self._find_furthest_neighbor(tree, query_point, bv)
             if new_point is None:
                 return selected
             selected.append(new_point.index)
@@ -802,11 +710,11 @@ class KDTree(SelectionBase):
                 best_distance_av = (count * best_distance_av + new_point.distance) / (count + 1)
             if count == 1:
                 if num_eliminate > 0 and self.scaling != 0:
-                    num_eliminate = self.eliminate(tree, arr[self.starting_idx], best_distance_av,
-                                                   num_eliminate, bv)
+                    num_eliminate = self._eliminate(tree, arr[self.starting_idx], best_distance_av * self.scaling,
+                                                    num_eliminate, bv)
             if num_eliminate > 0 and self.scaling != 0:
-                num_eliminate = self.eliminate(tree, new_point.point, best_distance_av,
-                                               num_eliminate, bv)
+                num_eliminate = self._eliminate(tree, new_point.point, best_distance_av * self.scaling,
+                                                num_eliminate, bv)
             count += 1
         return selected
 
