@@ -277,7 +277,7 @@ class OptiSim(SelectionBase):
         return predict_radius(self, arr, num_selected, cluster_ids)
 
 
-class DirectedSphereExclusion(SelectionBase):
+class DirectedSphereExclusion(KDTreeBase):
     """Selecting points using Directed Sphere Exclusion algorithm.
 
     Starting point is chosen as the reference point and not included in the selected molecules. The
@@ -315,6 +315,7 @@ class DirectedSphereExclusion(SelectionBase):
         self.func_distance = func_distance
         self.starting_idx = start_id
         self.random_seed = random_seed
+        self.BT = collections.namedtuple("BT", ["value", "index", "left", "right"])
 
     def algorithm(self, arr):
         """
@@ -331,30 +332,27 @@ class DirectedSphereExclusion(SelectionBase):
             List of ids of selected molecules
         """
         selected = []
-        ref = [self.starting_idx]
-        candidates = np.delete(np.arange(0, len(arr)), ref)
+        candidates = np.delete(np.arange(0, len(arr)), self.starting_idx)
         distances = []
         for idx in candidates:
-            ref_point = arr[ref[0]]
+            ref_point = arr[self.starting_idx]
             data_point = arr[idx]
             distance = self.func_distance(ref_point, data_point)
             distances.append((distance, idx))
         distances.sort()
         order = [idx for dist, idx in distances]
 
+        kdtree = self._kdtree(arr)
+        bv = bitarray.bitarray(len(arr))
+        bv[:] = 0
+        bv[self.starting_idx] = 1
+
         for idx in order:
-            if len(selected) == 0:
+            if not bv[idx]:
                 selected.append(idx)
-                continue
-            distances = []
-            for selected_idx in selected:
-                data_point = arr[idx]
-                selected_point = arr[selected_idx]
-                distance = self.func_distance(data_point, selected_point)
-                distances.append(distance)
-            min_dist = min(distances)
-            if min_dist > self.r:
-                selected.append(idx)
+                elim = self._find_nearest_neighbor(kdtree=kdtree, point=arr[idx], threshold=self.r)
+                for index in elim:
+                    bv[index] = 1
 
         return selected
 
@@ -579,7 +577,7 @@ class KDTree(KDTreeBase):
         self.func_distance = func_distance
         self.BT = collections.namedtuple("BT", ["value", "index", "left", "right"])
         self.FNRecord = collections.namedtuple("FNRecord", ["point", "index", "distance"])
-        self.scaling = scaling/100
+        self.scaling = scaling / 100
         self.ratio = None
 
     def _find_furthest_neighbor(self, kdtree, point, selected_bitvector):
@@ -694,7 +692,7 @@ class KDTree(KDTreeBase):
         bv[self.starting_idx] = 1
         count = 1
         num_eliminate = arr_len - num_selected
-        self.ratio = math.ceil(num_eliminate/num_selected)
+        self.ratio = math.ceil(num_eliminate / num_selected)
         best_distance_av = 0
         while len(selected) < num_selected:
             new_point = self._find_furthest_neighbor(tree, query_point, bv)
