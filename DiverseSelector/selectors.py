@@ -158,7 +158,7 @@ class MaxSum(SelectionBase):
         return selected
 
 
-class OptiSim(SelectionBase):
+class OptiSim(KDTreeBase):
     """Selecting compounds using OptiSim algorithm.
 
     Initial point is chosen as medoid center. Points are randomly chosen and added to a subsample
@@ -206,6 +206,7 @@ class OptiSim(SelectionBase):
         self.func_distance = func_distance
         self.start_id = start_id
         self.random_seed = random_seed
+        self.BT = collections.namedtuple("BT", ["value", "index", "left", "right"])
 
     def algorithm(self, arr) -> list:
         """
@@ -223,6 +224,14 @@ class OptiSim(SelectionBase):
         """
         selected = [self.start_id]
         recycling = []
+
+        bv = bitarray.bitarray(len(arr))
+        bv[:] = 0
+        bv[self.start_id] = 1
+        kdtree = self._kdtree(arr)
+        elim = self._find_nearest_neighbor(kdtree=kdtree, point=arr[self.start_id], threshold=self.r)
+        for index in elim:
+            bv[index] = 1
 
         candidates = np.delete(np.arange(0, len(arr)), selected + recycling)
         subsample = {}
@@ -773,8 +782,9 @@ def predict_radius(obj: Union[DirectedSphereExclusion, OptiSim], arr, num_select
         else:
             bounds[1] = rg
         count += 1
-    if count == 20:
+    if count == 10:
         print(f"Optimal radius finder failed to converge, selected {len(result)} molecules instead "
               f"of requested {num_selected}.")
+    print(f"TEST: {count+1} rounds completed to find optimal radius {obj.r}")
     obj.r = original_r
     return result

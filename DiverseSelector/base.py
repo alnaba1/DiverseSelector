@@ -129,7 +129,7 @@ class KDTreeBase(SelectionBase, ABC):
 
         Parameters
         ----------
-        arr: list
+        arr: list or np.ndarray
             Coordinate array of points.
 
         Returns
